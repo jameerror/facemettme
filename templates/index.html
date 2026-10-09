@@ -20,12 +20,14 @@
           <label class="drop" id="source-drop"><input id="source" name="source" type="file" accept=".jpg,.jpeg,.png,.webp,.bmp" required>
             <div class="empty"><span class="upload-icon">◎</span><strong>เลือกรูปหน้าอ้างอิง</strong><span>ลากไฟล์มาวาง หรือคลิกเลือก</span><small>JPG · PNG · WEBP · BMP</small></div><img id="source-preview" alt="รูปใบหน้าอ้างอิง" hidden>
           </label><p class="hint" id="source-name">ใช้ภาพชัด เห็นใบหน้าตรง และมีคนเดียว · สูงสุด 50 MB</p>
+          <button id="clear-source" class="secondary clear-upload" type="button" hidden>ล้างรูปอ้างอิง</button>
         </section>
         <div class="connector">→</div>
         <section class="card"><div class="step"><span>02</span><h2>ภาพหรือวิดีโอเป้าหมาย</h2><small>TARGET</small></div>
           <label class="drop" id="target-drop"><input id="target" name="target" type="file" accept=".jpg,.jpeg,.png,.webp,.bmp,.mp4,.mov,.mkv,.avi,.webm" required>
             <div class="empty"><span class="upload-icon">▧</span><strong>เลือกภาพหรือวิดีโอ</strong><span>ลากไฟล์มาวาง หรือคลิกเลือก</span><small>IMAGE · MP4 · MOV · MKV · AVI · WEBM</small></div><img id="target-preview" alt="ภาพเป้าหมาย" hidden><video id="target-video" muted playsinline controls hidden></video>
           </label><p class="hint" id="target-name">ไฟล์เป้าหมายสูงสุด {% if config.SERVER_SETTINGS.max_upload_mb >= 1024 %}{{ '%g'|format(config.SERVER_SETTINGS.max_upload_mb / 1024) }} GB{% else %}{{ config.SERVER_SETTINGS.max_upload_mb }} MB{% endif %} · วิดีโอเก็บเสียงต้นฉบับ</p>
+          <button id="clear-target" class="secondary clear-upload" type="button" hidden>ล้างไฟล์เป้าหมาย</button>
         </section>
       </div>
       <section class="options"><div><label for="mode">ประมวลผลด้วย</label><select id="mode" name="mode"><option value="auto">อัตโนมัติ · GPU / CPU</option><option value="cpu">CPU</option><option value="cuda">NVIDIA GPU · CUDA</option></select></div>

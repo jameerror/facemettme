@@ -10,6 +10,7 @@ let duration = 0;
 const isVideoTarget = () => /\.(mp4|mov|mkv|avi|webm)$/i.test($('target').files[0]?.name || '');
 const selectedFaces = () => [...$('face-picker').querySelectorAll('input:checked')].map(el => Number(el.value));
 const urls = {};
+const uploadHints = Object.fromEntries(['source', 'target'].map(name => [name, $(name + '-name').textContent]));
 let maxUploadMB = 5120;
 let maxReferenceMB = 50;
 const formatLimit = mb => mb >= 1024 ? `${mb / 1024} GB` : `${mb} MB`;
@@ -18,7 +19,11 @@ async function api(url, options = {}) {
   options.headers = {...options.headers, 'X-App-Token': token};
   const response = await fetch(url, options);
   const data = await response.json().catch(() => ({}));
-  if (!response.ok) throw new Error(data.error || `คำขอไม่สำเร็จ (${response.status})`);
+  if (!response.ok) {
+    const error = new Error(data.error || `คำขอไม่สำเร็จ (${response.status})`);
+    error.status = response.status;
+    throw error;
+  }
   return data;
 }
 function showError(message) { $('error').textContent = message; $('error').hidden = false; }
@@ -30,21 +35,15 @@ function setBusy(value, processingJob = true) {
 }
 function preview(name) {
   const file = $(name).files[0];
-  if (!file) return;
+  if (!file) return clearUpload(name);
+  $(name === 'source' ? 'clear-source' : 'clear-target').hidden = false;
   if (name === 'source') clearSwappedPreview();
   if (name === 'target') {
     clearVideoSession();
     duration = 0; setFrameTime(0);
+    $('frame-time').removeAttribute('max'); $('frame-slider').max = 0;
     $('video-duration').textContent = 'ยังไม่ทราบความยาว';
-    $('video-editor').hidden = !isVideoTarget();
-    const selectedOption = $('selection').querySelector('[value="selected"]');
-    const largestOption = $('selection').querySelector('[value="largest"]');
-    selectedOption.hidden = selectedOption.disabled = !isVideoTarget();
-    largestOption.hidden = largestOption.disabled = isVideoTarget();
-    $('selection').value = isVideoTarget() ? 'selected' : 'largest';
-    $('selection-hint').textContent = isVideoTarget()
-      ? 'เลือกคนจากรูปในเฟรมตัวอย่างเพื่อให้ติดตามคนเดิมตลอดคลิป · ทุกใบหน้า = รวมคนที่ปรากฏในเฟรมอื่นด้วย'
-      : 'คนหลัก = ใบหน้าที่ใหญ่ที่สุดในภาพ · ความละเอียดตรวจจับไม่ได้เพิ่มความละเอียดใบหน้าของโมเดล';
+    updateTargetType();
   }
   if (urls[name]) URL.revokeObjectURL(urls[name]);
   urls[name] = URL.createObjectURL(file);
@@ -57,9 +56,49 @@ function preview(name) {
   media.src = urls[name]; media.hidden = false;
   $(name + '-drop').querySelector('.empty').hidden = true;
   $(name + '-name').textContent = file.name + ' · ' + (file.size / 1024 / 1024).toFixed(1) + ' MB';
-  media.onerror = () => { media.hidden = true; $(name + '-name').textContent = file.name + ' · เบราว์เซอร์แสดงตัวอย่างไฟล์นี้ไม่ได้ แต่ยังประมวลผลได้'; };
+  media.onerror = () => {
+    if ($(name).files[0] !== file) return;
+    media.hidden = true; $(name + '-name').textContent = file.name + ' · เบราว์เซอร์แสดงตัวอย่างไฟล์นี้ไม่ได้ แต่ยังประมวลผลได้';
+  };
+}
+function updateTargetType() {
+  const video = isVideoTarget();
+  $('video-editor').hidden = !video;
+  const selectedOption = $('selection').querySelector('[value="selected"]');
+  const largestOption = $('selection').querySelector('[value="largest"]');
+  selectedOption.hidden = selectedOption.disabled = !video;
+  largestOption.hidden = largestOption.disabled = video;
+  $('selection').value = video ? 'selected' : 'largest';
+  $('selection-hint').textContent = video
+    ? 'เลือกคนจากรูปในเฟรมตัวอย่างเพื่อให้ติดตามคนเดิมตลอดคลิป · ทุกใบหน้า = รวมคนที่ปรากฏในเฟรมอื่นด้วย'
+    : 'คนหลัก = ใบหน้าที่ใหญ่ที่สุดในภาพ · ความละเอียดตรวจจับไม่ได้เพิ่มความละเอียดใบหน้าของโมเดล';
+}
+function clearUpload(name) {
+  if (busy) return;
+  $(name).value = '';
+  const image = $(name + '-preview');
+  image.onerror = null; image.hidden = true; image.removeAttribute('src');
+  if (name === 'target') {
+    const video = $('target-video');
+    video.onerror = null; video.pause(); video.removeAttribute('src'); video.load(); video.hidden = true;
+    clearVideoSession();
+    duration = 0; setFrameTime(0);
+    $('frame-time').removeAttribute('max'); $('frame-slider').max = 0;
+    $('video-duration').textContent = 'ยังไม่ทราบความยาว';
+    $('frame-backend').textContent = ''; $('frame-label').textContent = '';
+    updateTargetType();
+  } else {
+    clearSwappedPreview();
+  }
+  if (urls[name]) { URL.revokeObjectURL(urls[name]); delete urls[name]; }
+  $(name + '-drop').classList.remove('drag');
+  $(name + '-drop').querySelector('.empty').hidden = false;
+  $(name + '-name').textContent = uploadHints[name];
+  $('clear-' + name).hidden = true;
+  $('error').hidden = true;
 }
 ['source', 'target'].forEach(name => {
+  $('clear-' + name).addEventListener('click', () => clearUpload(name));
   $(name).addEventListener('change', () => preview(name));
   const drop = $(name + '-drop');
   drop.addEventListener('dragover', e => { e.preventDefault(); if (!busy) drop.classList.add('drag'); });
@@ -106,6 +145,13 @@ async function poll() {
     timer = setTimeout(poll, 1000);
   } catch (error) {
     showError(error.message);
+    if (error.status === 404) {
+      currentJob = null;
+      sessionStorage.removeItem('face-swap-job');
+      setBusy(false);
+      $('job-title').textContent = 'ไม่พบงานเดิม กรุณาเริ่มงานใหม่';
+      return;
+    }
     if (currentJob) timer = setTimeout(poll, 3000);
   }
 }
@@ -181,7 +227,9 @@ function clearVideoSession() {
   const previous = videoSession;
   videoSession = null; invalidateFrame();
   $('editor-message').textContent = 'เลือกเวลาแล้วโหลดเฟรม วิดีโอจะอัปโหลดเพียงครั้งเดียว';
-  if (previous) api('/api/videos/' + previous, {method:'DELETE'}).catch(error => showError(error.message));
+  if (previous) api('/api/videos/' + previous, {method:'DELETE'}).catch(error => {
+    if (error.status !== 404) showError(error.message);
+  });
 }
 function setFrameTime(seconds, seek = false) {
   let value = Number(seconds);
@@ -204,7 +252,7 @@ function setDuration(seconds) {
   setFrameTime($('frame-time').value);
 }
 $('target-video').addEventListener('loadedmetadata', () => {
-  if (Number.isFinite($('target-video').duration)) setDuration($('target-video').duration);
+  if (isVideoTarget() && Number.isFinite($('target-video').duration)) setDuration($('target-video').duration);
 });
 $('target-video').addEventListener('timeupdate', () => {
   if (!busy && isVideoTarget()) setFrameTime($('target-video').currentTime);
@@ -216,7 +264,7 @@ $('selection').addEventListener('change', () => {
   clearSwappedPreview();
 });
 ['mode', 'size'].forEach(id => $(id).addEventListener('change', clearSwappedPreview));
-$('clear-video').addEventListener('click', clearVideoSession);
+$('clear-video').addEventListener('click', () => clearUpload('target'));
 
 async function uploadVideo() {
   if (videoSession) return;

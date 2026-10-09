@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="th">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="app-token" content="{{ token }}">
+  <title>Face Swap Me — เปลี่ยนใบหน้าในแบบของคุณ</title>
+  <link rel="stylesheet" href="/static/style.css">
+  <script defer src="/static/app.js"></script>
+</head>
+<body>
+  <header><a class="brand" href="/">◈ <span>face swap <b>me.</b></span></a><span class="local"><i></i> {{ 'ประมวลผลบนเซิร์ฟเวอร์ของคุณ' if cloud else 'ประมวลผลในเครื่องคุณ' }}</span></header>
+  <main>
+    <div class="eyebrow">YOUR FACE. A NEW FRAME.</div>
+    <h1>เปลี่ยนใบหน้า<br><span>สร้างอีกมุมของคุณ</span></h1>
+    <p class="intro">รูปอ้างอิงหนึ่งใบ เปลี่ยนได้ทั้งภาพและวิดีโอ<br>เลือกไฟล์ ปรับตัวเลือก แล้วปล่อยให้เราจัดการ</p>
+    <div id="setup" class="notice" role="status">กำลังตรวจสอบโมเดล…</div>
+    <form id="swap-form">
+      <div class="uploads">
+        <section class="card"><div class="step"><span>01</span><h2>ใบหน้าของคุณ</h2><small>REFERENCE</small></div>
+          <label class="drop" id="source-drop"><input id="source" name="source" type="file" accept=".jpg,.jpeg,.png,.webp,.bmp" required>
+            <div class="empty"><span class="upload-icon">◎</span><strong>เลือกรูปหน้าอ้างอิง</strong><span>ลากไฟล์มาวาง หรือคลิกเลือก</span><small>JPG · PNG · WEBP · BMP</small></div><img id="source-preview" alt="รูปใบหน้าอ้างอิง" hidden>
+          </label><p class="hint" id="source-name">ใช้ภาพชัด เห็นใบหน้าตรง และมีคนเดียว · สูงสุด 50 MB</p>
+        </section>
+        <div class="connector">→</div>
+        <section class="card"><div class="step"><span>02</span><h2>ภาพหรือวิดีโอเป้าหมาย</h2><small>TARGET</small></div>
+          <label class="drop" id="target-drop"><input id="target" name="target" type="file" accept=".jpg,.jpeg,.png,.webp,.bmp,.mp4,.mov,.mkv,.avi,.webm" required>
+            <div class="empty"><span class="upload-icon">▧</span><strong>เลือกภาพหรือวิดีโอ</strong><span>ลากไฟล์มาวาง หรือคลิกเลือก</span><small>IMAGE · MP4 · MOV · MKV · AVI · WEBM</small></div><img id="target-preview" alt="ภาพเป้าหมาย" hidden><video id="target-video" muted playsinline controls hidden></video>
+          </label><p class="hint" id="target-name">ไฟล์เป้าหมายสูงสุด {% if config.SERVER_SETTINGS.max_upload_mb >= 1024 %}{{ '%g'|format(config.SERVER_SETTINGS.max_upload_mb / 1024) }} GB{% else %}{{ config.SERVER_SETTINGS.max_upload_mb }} MB{% endif %} · วิดีโอเก็บเสียงต้นฉบับ</p>
+        </section>
+      </div>
+      <section class="options"><div><label for="mode">ประมวลผลด้วย</label><select id="mode" name="mode"><option value="auto">อัตโนมัติ · GPU / CPU</option><option value="cpu">CPU</option><option value="cuda">NVIDIA GPU · CUDA</option></select></div>
+        <div><label for="selection">ใบหน้าที่เปลี่ยน</label><select id="selection" name="selection"><option value="largest">คนหลัก · ติดตามบุคคลเดิม</option><option value="all">ทุกใบหน้า</option></select></div>
+        <div><label for="size">การตรวจจับใบหน้า</label><select id="size" name="size"><option value="640">สมดุล · 640</option><option value="320">รวดเร็ว · 320</option><option value="1024">ละเอียด · 1024</option></select></div>
+      </section>
+      <p class="hint option-hint">คนหลัก = ใบหน้าที่ใหญ่ที่สุดในภาพ หรือคนแรกที่พบในวิดีโอ · ความละเอียดตรวจจับไม่ได้เพิ่มความละเอียดใบหน้าของโมเดล</p>
+      <div class="actions"><span>{{ 'ไฟล์จะถูกส่งไปประมวลผลบนเซิร์ฟเวอร์ของคุณ' if cloud else 'ไฟล์ของคุณอยู่ในเครื่องนี้' }}</span><button id="start" type="submit">เริ่มสลับใบหน้า <span>↗</span></button></div>
+    </form>
+    <section id="job-panel" class="result-card" hidden aria-live="polite">
+      <div class="result-head"><h2 id="job-title">กำลังสร้างผลลัพธ์</h2><span id="backend" class="pill"></span></div>
+      <div class="progress"><div id="bar"></div></div><div class="progress-label"><p id="message"></p><span id="percent">0%</span></div>
+      <img id="result-image" alt="ภาพหลังสลับใบหน้า" hidden><video id="result-video" controls playsinline hidden></video>
+      <p id="details" class="hint"></p><div class="result-actions"><button id="cancel" class="secondary" type="button">ยกเลิกงาน</button><a id="download" class="button" hidden>ดาวน์โหลดผลลัพธ์ ↓</a><button id="delete" class="secondary" type="button" hidden>ลบผลลัพธ์{{ 'จากเซิร์ฟเวอร์' if cloud else 'จากเครื่อง' }}</button></div>
+    </section>
+    <p id="error" class="error" role="alert" hidden></p>
+    <footer><span>FACE SWAP ME / {{ 'CLOUD' if cloud else 'LOCAL' }} STUDIO</span><p>ภาพชัดและมุมใบหน้าที่ใกล้กันให้ผลลัพธ์ที่ดีกว่า · ผลลัพธ์อาจต่างกันตามแสง มุมหน้า และการบดบัง</p></footer>
+  </main>
+</body>
+</html>

@@ -1,0 +1,9 @@
+.venv/
+.venv-linux/
+__pycache__/
+*.pyc
+data/
+models/
+.pytest_cache/
+.env
+secrets/

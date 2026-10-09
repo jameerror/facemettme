@@ -1,0 +1,11 @@
+.venv
+.venv-linux
+.git
+__pycache__
+**/__pycache__
+*.pyc
+data
+models
+secrets
+.env
+requirements-lock.txt

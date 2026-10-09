@@ -1,0 +1,12 @@
+services:
+  app:
+    build:
+      args:
+        GPU: "true"
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]

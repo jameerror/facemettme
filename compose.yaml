@@ -1,0 +1,37 @@
+services:
+  app:
+    build:
+      context: .
+    restart: unless-stopped
+    init: true
+    ports:
+      - "127.0.0.1:7860:7860"
+    environment:
+      FACE_SWAP_TRUSTED_HOSTS: ${FACE_SWAP_TRUSTED_HOSTS:-127.0.0.1,localhost}
+      FACE_SWAP_MAX_UPLOAD_MB: ${FACE_SWAP_MAX_UPLOAD_MB:-5120}
+    volumes:
+      - models:/app/models
+      - results:/app/data
+    stop_grace_period: 30s
+  https:
+    image: caddy:2
+    profiles: [https]
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    environment:
+      FACE_SWAP_DOMAIN: ${FACE_SWAP_DOMAIN:-swap.example.com}
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      app:
+        condition: service_healthy
+volumes:
+  models:
+  results:
+  caddy_data:
+  caddy_config:

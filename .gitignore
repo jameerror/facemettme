@@ -7,3 +7,4 @@ models/
 .pytest_cache/
 .env
 secrets/
+VALIDATION.md

@@ -15,6 +15,6 @@ jobs:
       - run: python -m unittest discover -s tests -v
       - run: docker compose config --quiet
       - run: docker compose -f compose.yaml -f compose.gpu.yaml config --quiet
-      - run: docker build -t face-swap-me:test .
+      - run: docker build -t face-swap-me-tt-me:test .
       - name: Test the Linux container without model downloads
-        run: docker run --rm face-swap-me:test python -m unittest discover -s tests -v
+        run: docker run --rm face-swap-me-tt-me:test python -m unittest discover -s tests -v

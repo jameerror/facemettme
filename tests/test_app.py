@@ -63,7 +63,7 @@ class ApiTests(unittest.TestCase):
         self.temp.cleanup()
 
     def test_home_and_status(self):
-        self.assertIn('Face Swap Me'.encode(), self.client.get('/').data)
+        self.assertIn('Face Swap Me TT Me'.encode(), self.client.get('/').data)
         self.assertEqual(self.client.get('/api/status').status_code, 200)
 
     def test_token_and_host(self):

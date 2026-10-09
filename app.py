@@ -1,4 +1,4 @@
-"""Face Swap Me: local and Linux cloud browser application."""
+"""Face Swap Me TT Me: local and Linux cloud browser application."""
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 import logging
@@ -229,7 +229,7 @@ def result(job_id):
         if not job or job['state'] != 'done':
             abort(404)
         path = job['folder'] / ('result.png' if job['kind'] == 'image' else 'result.mp4')
-    return send_file(path, as_attachment=request.args.get('download') == '1', download_name='face-swap-me'+path.suffix)
+    return send_file(path, as_attachment=request.args.get('download') == '1', download_name='face-swap-me-tt-me'+path.suffix)
 
 
 @app.delete('/api/jobs/<job_id>')
@@ -267,7 +267,7 @@ if __name__ == '__main__':
     configure(settings)
     local_host = '[::1]' if settings.host == '::1' else '127.0.0.1'
     url = f'http://{local_host}:{settings.port}'
-    print(f'Face Swap Me: {url}', flush=True)
+    print(f'Face Swap Me TT Me: {url}', flush=True)
     if not args.no_browser and not settings.cloud:
         threading.Timer(1.5, lambda: webbrowser.open(url)).start()
     serve(app, host=settings.host, port=settings.port, threads=6,

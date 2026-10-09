@@ -1,4 +1,4 @@
-# Face Swap Me
+# Face Swap Me TT Me
 
 แอป Python พร้อม GUI ภาษาไทยผ่านเบราว์เซอร์ สำหรับสลับใบหน้าจากภาพอ้างอิงไปยังภาพหรือวิดีโอ ประมวลผลในเครื่องด้วย InsightFace / INSwapper และ ONNX Runtime
 

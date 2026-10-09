@@ -1,4 +1,5 @@
 @echo off
+title Face Swap Me TT Me
 cd /d "%~dp0"
 if not exist ".venv\Scripts\python.exe" (
   echo Run install.ps1 first. See README.md.

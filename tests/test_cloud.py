@@ -72,6 +72,8 @@ class CloudTests(unittest.TestCase):
             submit.assert_not_called()
             self.assertEqual(list(Path(directory).iterdir()), [])
             self.assertEqual(web.jobs, {})
+            response.close()
+            response.request.environ['wsgi.input'].close()
 
     def test_exact_target_limit_plus_reference_is_accepted(self):
         headers = dict(self.headers, **{'X-App-Token': web.TOKEN})
@@ -83,6 +85,8 @@ class CloudTests(unittest.TestCase):
                 'target': (io.BytesIO(b'x'*(2*1024**2)), 'target.mp4')}, headers=headers)
             self.assertEqual(response.status_code, 202)
             submit.assert_called_once()
+            response.close()
+            response.request.environ['wsgi.input'].close()
 
     def test_default_five_gb_and_request_overhead(self):
         from settings import REFERENCE_MAX_MB, MULTIPART_OVERHEAD_MB

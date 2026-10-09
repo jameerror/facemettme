@@ -100,6 +100,21 @@ class FaceEngine:
         faces = self.faces(image)
         if selection == 'all':
             targets = faces
+        elif selection == 'selected':
+            if identity is None:
+                raise ValueError('กรุณาเลือกใบหน้าจากเฟรมตัวอย่างก่อน')
+            identities = np.atleast_2d(identity)
+            pairs = sorted(((float(np.dot(face.normed_embedding, embedding)), face_index, person_index)
+                            for face_index, face in enumerate(faces)
+                            for person_index, embedding in enumerate(identities)), reverse=True)
+            used_faces, used_people, targets = set(), set(), []
+            for score, face_index, person_index in pairs:
+                if score < 0.35:
+                    break
+                if face_index not in used_faces and person_index not in used_people:
+                    targets.append(faces[face_index])
+                    used_faces.add(face_index)
+                    used_people.add(person_index)
         elif identity is None:
             targets = sorted(faces, key=lambda f: (f.bbox[2]-f.bbox[0])*(f.bbox[3]-f.bbox[1]), reverse=True)[:1]
             if targets:
@@ -115,7 +130,7 @@ class FaceEngine:
         return result, len(targets), identity
 
 
-def process_video(engine, source, target, output, selection, progress, cancel):
+def process_video(engine, source, target, output, selection, progress, cancel, identities=None):
     import imageio_ffmpeg
     if cancel.is_set():
         raise Cancelled()
@@ -161,7 +176,7 @@ def process_video(engine, source, target, output, selection, progress, cancel):
         if not writer.isOpened():
             raise ValueError('สร้างไฟล์วิดีโอไม่ได้')
         frame_count = swapped_frames = 0
-        identity = None
+        identity = identities
         while True:
             if cancel.is_set():
                 raise Cancelled()

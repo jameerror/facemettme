@@ -14,6 +14,7 @@ import cv2
 
 from engine import FaceEngine, Cancelled, MODEL_ROOT, SWAP_MODEL, read_image, process_video
 from settings import DATA_ROOT, REFERENCE_MAX_MB, load_settings
+from video_editor import VideoEditor
 
 ROOT = Path(__file__).resolve().parent
 DATA = DATA_ROOT
@@ -34,6 +35,10 @@ jobs = {}
 lock = threading.RLock()
 executor = ThreadPoolExecutor(max_workers=1)
 engine = FaceEngine()
+inference_lock = threading.Lock()
+editor = VideoEditor(lambda: engine, inference_lock,
+                     lambda: any(job['state'] in {'queued', 'running'} for job in jobs.values()), lambda: DATA)
+app.register_blueprint(editor.blueprint(lambda: app.config['SERVER_SETTINGS']))
 IMAGE_EXT = {'.jpg', '.jpeg', '.png', '.webp', '.bmp'}
 VIDEO_EXT = {'.mp4', '.mov', '.mkv', '.avi', '.webm'}
 
@@ -82,7 +87,12 @@ def update(job_id, **changes):
         jobs[job_id].update(changes)
 
 
-def worker(job_id, source, target, mode, size, selection, kind):
+def worker(job_id, source, target, mode, size, selection, kind, identities=None, video_id=None):
+    with inference_lock:
+        return process_job(job_id, source, target, mode, size, selection, kind, identities, video_id)
+
+
+def process_job(job_id, source, target, mode, size, selection, kind, identities=None, video_id=None):
     with lock:
         job = jobs[job_id]
         cancel, folder = job['cancel'], job['folder']
@@ -109,7 +119,7 @@ def worker(job_id, source, target, mode, size, selection, kind):
                 raise ValueError('บันทึกภาพไม่สำเร็จ')
             details = {'faces': count}
         else:
-            details = process_video(engine, face, target, output, selection, progress, cancel)
+            details = process_video(engine, face, target, output, selection, progress, cancel, identities)
         if cancel.is_set():
             raise Cancelled()
         update(job_id, state='done', progress=100, message='เสร็จแล้ว', details=details,
@@ -123,15 +133,20 @@ def worker(job_id, source, target, mode, size, selection, kind):
         update(job_id, state='error', message=str(exc))
     finally:
         source.unlink(missing_ok=True)
-        target.unlink(missing_ok=True)
+        if video_id:
+            editor.release(video_id, consume=True)
+        else:
+            target.unlink(missing_ok=True)
 
 
 @app.post('/api/jobs')
 def create_job():
     source, target = request.files.get('source'), request.files.get('target')
-    if not source or not target or not source.filename or not target.filename:
+    video_id = request.form.get('video_id')
+    if not source or not source.filename or (not video_id and (not target or not target.filename)):
         return jsonify(error='กรุณาเลือกรูปอ้างอิงและไฟล์เป้าหมาย'), 400
-    source_ext, target_ext = Path(source.filename).suffix.lower(), Path(target.filename).suffix.lower()
+    source_ext = Path(source.filename).suffix.lower()
+    target_ext = '.mp4' if video_id else Path(target.filename).suffix.lower()
     if source_ext not in IMAGE_EXT or target_ext not in IMAGE_EXT | VIDEO_EXT:
         return jsonify(error='นามสกุลไฟล์ไม่รองรับ'), 400
     mode, selection = request.form.get('mode', 'auto'), request.form.get('selection', 'largest')
@@ -139,20 +154,37 @@ def create_job():
         size = int(request.form.get('size', '640'))
     except ValueError:
         return jsonify(error='ขนาดตรวจจับไม่ถูกต้อง'), 400
-    if mode not in {'auto', 'cpu', 'cuda'} or selection not in {'largest', 'all'} or size not in {320, 640, 1024}:
+    if mode not in {'auto', 'cpu', 'cuda'} or selection not in {'largest', 'all', 'selected'} or size not in {320, 640, 1024}:
         return jsonify(error='ตัวเลือกไม่ถูกต้อง'), 400
+    if selection == 'selected' and not video_id:
+        return jsonify(error='กรุณาอัปโหลดวิดีโอแล้วเลือกใบหน้าจากเฟรมตัวอย่าง'), 400
+    identities = None
     with lock:
         if any(job['state'] in {'queued', 'running'} for job in jobs.values()):
             return jsonify(error='มีงานกำลังทำอยู่ กรุณารอหรือยกเลิกก่อน'), 409
+        if video_id:
+            try:
+                target_path, identities = editor.claim(video_id, request.form.get('frame_id'),
+                                                        request.form.get('face_ids'), selection)
+            except ValueError as exc:
+                return jsonify(error=str(exc)), 400
         job_id = uuid.uuid4().hex
         folder = DATA / job_id
-        folder.mkdir()
+        try:
+            folder.mkdir()
+        except Exception:
+            if video_id:
+                editor.release(video_id)
+            raise
         jobs[job_id] = dict(id=job_id, state='queued', progress=0, message='รอประมวลผล',
                             backend='', folder=folder, cancel=threading.Event())
     try:
-        source_path, target_path = folder / ('source'+source_ext), folder / ('target'+target_ext)
+        source_path = folder / ('source'+source_ext)
+        if not video_id:
+            target_path = folder / ('target'+target_ext)
         source.save(source_path, buffer_size=1024*1024)
-        target.save(target_path, buffer_size=1024*1024)
+        if not video_id:
+            target.save(target_path, buffer_size=1024*1024)
         if source_path.stat().st_size > REFERENCE_MAX_MB * 1024**2:
             raise RequestEntityTooLarge(description=f'รูปอ้างอิงต้องไม่เกิน {REFERENCE_MAX_MB} MB')
         if target_path.stat().st_size > app.config['SERVER_SETTINGS'].max_upload_mb * 1024**2:
@@ -160,11 +192,13 @@ def create_job():
         if not source_path.stat().st_size or not target_path.stat().st_size:
             raise ValueError('ไฟล์ว่างเปล่า')
         executor.submit(worker, job_id, source_path, target_path, mode, size, selection,
-                        'image' if target_ext in IMAGE_EXT else 'video')
+                        'image' if target_ext in IMAGE_EXT else 'video', identities, video_id)
     except Exception as exc:
         with lock:
             jobs.pop(job_id, None)
         shutil.rmtree(folder)
+        if video_id:
+            editor.release(video_id)
         if isinstance(exc, RequestEntityTooLarge):
             raise
         return jsonify(error=str(exc)), 400

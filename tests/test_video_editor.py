@@ -104,8 +104,9 @@ class EditorApiTests(unittest.TestCase):
         self.assertEqual(response.status_code, 202)
         args = submit.call_args.args
         self.assertEqual(args[3], target)
-        np.testing.assert_array_equal(args[-2], [[0,1]])
-        self.assertEqual(args[-1], self.video_id)
+        np.testing.assert_array_equal(args[-3], [[0,1]])
+        self.assertEqual(args[-2], self.video_id)
+        self.assertEqual(args[-1], 4)
         self.assertEqual(self.client.delete('/api/videos/'+self.video_id, headers=self.headers).status_code, 409)
 
     def test_extract_invalid_time_and_no_faces(self):

@@ -1,5 +1,7 @@
 """Local face swapping with explicit runtime selection and video audio preservation."""
 from pathlib import Path
+from collections import deque
+from concurrent.futures import ThreadPoolExecutor, wait
 import math
 import subprocess
 import threading
@@ -130,8 +132,54 @@ class FaceEngine:
         return result, len(targets), identity
 
 
-def process_video(engine, source, target, output, selection, progress, cancel, identities=None):
+def processed_frames(engine, source, capture, selection, cancel, identities, thread_count):
+    """Keep a bounded window of frames in flight; yield strictly in input order."""
+    identity = identities
+    pending = deque()
+    pool = ThreadPoolExecutor(max_workers=thread_count, thread_name_prefix='swap-frame')
+
+    def swap(frame, selected):
+        if cancel.is_set():
+            raise Cancelled()
+        result = engine.swap(frame, source, selection, selected)
+        if cancel.is_set():
+            raise Cancelled()
+        return result
+
+    exhausted = False
+    try:
+        while not exhausted or pending:
+            if cancel.is_set():
+                raise Cancelled()
+            while not exhausted and len(pending) < thread_count:
+                if cancel.is_set():
+                    raise Cancelled()
+                ok, frame = capture.read()
+                if not ok:
+                    exhausted = True
+                    break
+                # Establish the legacy principal identity in timeline order.
+                if selection == 'largest' and identity is None:
+                    result, count, identity = swap(frame, None)
+                    yield result, count
+                else:
+                    pending.append(pool.submit(swap, frame, identity))
+            if pending:
+                future = pending.popleft()
+                while not wait([future], timeout=.1).done:
+                    if cancel.is_set():
+                        raise Cancelled()
+                result, count, _ = future.result()
+                yield result, count
+    finally:
+        # Wait for active inference before the shared model/files can be reused.
+        pool.shutdown(wait=True, cancel_futures=True)
+
+
+def process_video(engine, source, target, output, selection, progress, cancel, identities=None, thread_count=4):
     import imageio_ffmpeg
+    if type(thread_count) is not int or not 1 <= thread_count <= 32:
+        raise ValueError('จำนวนเธรดต้องเป็นจำนวนเต็ม 1–32')
     if cancel.is_set():
         raise Cancelled()
     ffmpeg = imageio_ffmpeg.get_ffmpeg_exe()
@@ -176,19 +224,18 @@ def process_video(engine, source, target, output, selection, progress, cancel, i
         if not writer.isOpened():
             raise ValueError('สร้างไฟล์วิดีโอไม่ได้')
         frame_count = swapped_frames = 0
-        identity = identities
-        while True:
-            if cancel.is_set():
-                raise Cancelled()
-            ok, frame = capture.read()
-            if not ok:
-                break
-            result, count, identity = engine.swap(frame, source, selection, identity)
-            writer.write(result)
-            frame_count += 1
-            swapped_frames += int(count > 0)
-            progress(min(94, 5 + 89 * frame_count / max(total, frame_count)),
-                     f'ประมวลผลเฟรม {frame_count:,} / {total:,}')
+        frames = processed_frames(engine, source, capture, selection, cancel, identities, thread_count)
+        try:
+            for result, count in frames:
+                if cancel.is_set():
+                    raise Cancelled()
+                writer.write(result)
+                frame_count += 1
+                swapped_frames += int(count > 0)
+                progress(min(94, 5 + 89 * frame_count / max(total, frame_count)),
+                         f'ประมวลผลเฟรม {frame_count:,} / {total:,} · {thread_count} เธรด')
+        finally:
+            frames.close()
         capture.release()
         writer.release()
         capture = writer = None
@@ -201,7 +248,8 @@ def process_video(engine, source, target, output, selection, progress, cancel, i
              '-map', '1:a:0?', '-c:v', 'libx264', '-preset', 'fast', '-crf', '18',
              '-pix_fmt', 'yuv420p', '-c:a', 'aac', '-b:a', '192k', '-t', str(frame_count/fps),
              '-movflags', '+faststart', str(output)])
-        return {'frames': frame_count, 'swapped_frames': swapped_frames, 'fps': round(fps, 3)}
+        return {'frames': frame_count, 'swapped_frames': swapped_frames, 'fps': round(fps, 3),
+                'thread_count': thread_count}
     finally:
         if capture is not None:
             capture.release()

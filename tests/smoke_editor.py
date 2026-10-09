@@ -14,6 +14,7 @@ from settings import DATA_ROOT
 
 parser = argparse.ArgumentParser()
 parser.add_argument('--url', default='http://127.0.0.1:7860')
+parser.add_argument('--threads', type=int, choices=range(1,33), default=4)
 args = parser.parse_args()
 session = requests.Session()
 token = re.search(r'name="app-token" content="([^"]+)"', session.get(args.url,timeout=10).text).group(1)
@@ -35,7 +36,8 @@ try:
     assert len(later['faces']) == len(first['faces'])+1
     print('REAL EDITOR: first frame',len(first['faces']),'faces; chosen later frame',len(later['faces']),'faces',flush=True)
     selected = later['faces'][1]['id']
-    values = dict(frame_id=later['frame_id'],face_ids=str([selected]),selection='selected',mode='cpu')
+    values = dict(frame_id=later['frame_id'],face_ids=str([selected]),selection='selected',mode='cpu',
+                  execution_thread_count=str(args.threads))
     with (folder/'reference.png').open('rb') as file:
         preview = check(session.post(f'{args.url}/api/videos/{video_id}/preview',data=values,
                                     files={'source':('reference.png',file)},timeout=120))
@@ -58,6 +60,7 @@ try:
         time.sleep(.5)
     assert job['state'] == 'done', job
     assert job['details']['frames'] == 3 and job['details']['swapped_frames'] == 1, job
+    assert job['details']['thread_count'] == args.threads, job
     result = session.get(args.url+job['result'],timeout=30)
     assert result.status_code == 200
     (folder/'editor-result.mp4').write_bytes(result.content)

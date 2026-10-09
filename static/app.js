@@ -98,7 +98,7 @@ async function poll() {
         media.src = job.result; media.hidden = false;
         $('download').href = job.result + '?download=1'; $('download').hidden = false;
         $('details').textContent = job.kind === 'video'
-          ? `สลับใบหน้า ${job.details.swapped_frames.toLocaleString()} / ${job.details.frames.toLocaleString()} เฟรม · ${job.details.fps} FPS`
+          ? `สลับใบหน้า ${job.details.swapped_frames.toLocaleString()} / ${job.details.frames.toLocaleString()} เฟรม · ${job.details.fps} FPS · ${job.details.thread_count || 1} เธรด`
           : `สลับใบหน้า ${job.details.faces} ใบหน้า · PNG`;
       }
       return;

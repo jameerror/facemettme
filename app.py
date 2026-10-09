@@ -20,6 +20,7 @@ ROOT = Path(__file__).resolve().parent
 DATA = DATA_ROOT
 DATA.mkdir(parents=True, exist_ok=True)
 app = Flask(__name__)
+app.config['EXECUTION_THREAD_COUNT'] = 4
 settings = load_settings()
 
 
@@ -62,7 +63,8 @@ def headers(response):
 
 @app.get('/')
 def index():
-    return render_template('index.html', token=TOKEN, cloud=app.config['SERVER_SETTINGS'].cloud)
+    return render_template('index.html', token=TOKEN, cloud=app.config['SERVER_SETTINGS'].cloud,
+                           execution_thread_count=app.config['EXECUTION_THREAD_COUNT'])
 
 
 @app.get('/healthz')
@@ -87,12 +89,12 @@ def update(job_id, **changes):
         jobs[job_id].update(changes)
 
 
-def worker(job_id, source, target, mode, size, selection, kind, identities=None, video_id=None):
+def worker(job_id, source, target, mode, size, selection, kind, identities=None, video_id=None, thread_count=4):
     with inference_lock:
-        return process_job(job_id, source, target, mode, size, selection, kind, identities, video_id)
+        return process_job(job_id, source, target, mode, size, selection, kind, identities, video_id, thread_count)
 
 
-def process_job(job_id, source, target, mode, size, selection, kind, identities=None, video_id=None):
+def process_job(job_id, source, target, mode, size, selection, kind, identities=None, video_id=None, thread_count=4):
     with lock:
         job = jobs[job_id]
         cancel, folder = job['cancel'], job['folder']
@@ -119,7 +121,7 @@ def process_job(job_id, source, target, mode, size, selection, kind, identities=
                 raise ValueError('บันทึกภาพไม่สำเร็จ')
             details = {'faces': count}
         else:
-            details = process_video(engine, face, target, output, selection, progress, cancel, identities)
+            details = process_video(engine, face, target, output, selection, progress, cancel, identities, thread_count)
         if cancel.is_set():
             raise Cancelled()
         update(job_id, state='done', progress=100, message='เสร็จแล้ว', details=details,
@@ -152,8 +154,11 @@ def create_job():
     mode, selection = request.form.get('mode', 'auto'), request.form.get('selection', 'largest')
     try:
         size = int(request.form.get('size', '640'))
+        thread_count = int(request.form.get('execution_thread_count', app.config['EXECUTION_THREAD_COUNT']))
     except ValueError:
-        return jsonify(error='ขนาดตรวจจับไม่ถูกต้อง'), 400
+        return jsonify(error='ขนาดตรวจจับหรือจำนวนเธรดไม่ถูกต้อง'), 400
+    if not 1 <= thread_count <= 32:
+        return jsonify(error='จำนวนเธรดต้องเป็นจำนวนเต็ม 1–32'), 400
     if mode not in {'auto', 'cpu', 'cuda'} or selection not in {'largest', 'all', 'selected'} or size not in {320, 640, 1024}:
         return jsonify(error='ตัวเลือกไม่ถูกต้อง'), 400
     if selection == 'selected' and not video_id:
@@ -192,7 +197,7 @@ def create_job():
         if not source_path.stat().st_size or not target_path.stat().st_size:
             raise ValueError('ไฟล์ว่างเปล่า')
         executor.submit(worker, job_id, source_path, target_path, mode, size, selection,
-                        'image' if target_ext in IMAGE_EXT else 'video', identities, video_id)
+                        'image' if target_ext in IMAGE_EXT else 'video', identities, video_id, thread_count)
     except Exception as exc:
         with lock:
             jobs.pop(job_id, None)
@@ -259,12 +264,15 @@ if __name__ == '__main__':
     parser.add_argument('--host', help='Bind address for local or cloud access')
     parser.add_argument('--port', type=int)
     parser.add_argument('--no-browser', action='store_true')
+    parser.add_argument('--execution-thread-count', type=int, choices=range(1, 33), default=4,
+                        metavar='1-32', help='Default parallel video frame workers (default: 4)')
     args = parser.parse_args()
     try:
         settings = load_settings(args.host, args.port)
     except (ValueError, OSError) as exc:
         parser.error(str(exc))
     configure(settings)
+    app.config['EXECUTION_THREAD_COUNT'] = args.execution_thread_count
     local_host = '[::1]' if settings.host == '::1' else '127.0.0.1'
     url = f'http://{local_host}:{settings.port}'
     print(f'Face Swap Me TT Me: {url}', flush=True)

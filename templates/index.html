@@ -37,6 +37,8 @@
         <div class="result-head"><h2>เลือกเฟรมและคนที่ต้องการเปลี่ยน</h2><span id="frame-backend" class="pill"></span></div>
         <p class="hint">เลื่อนไปยังช่วงที่เห็นคนที่ต้องการ แม้เขาจะไม่อยู่ในเฟรมแรก แล้วโหลดเฟรมเพื่อเลือกใบหน้า</p>
         <div class="frame-controls"><label for="frame-time">เวลาในวิดีโอ (วินาที)</label><input id="frame-time" type="number" min="0" step="0.01" value="0"><span id="video-duration">ยังไม่ทราบความยาว</span></div>
+        <div class="frame-controls"><label for="execution-thread-count">จำนวนเธรดประมวลผล</label><input id="execution-thread-count" name="execution_thread_count" type="number" min="1" max="32" step="1" value="{{ execution_thread_count }}"><span>ประมวลผลหลายเฟรมพร้อมกัน · 1–32 เธรด</span></div>
+        <p class="hint">ค่าเริ่มต้น 4 · เพิ่มเธรดเพื่อป้อนงานให้ GPU ต่อเนื่องขึ้น ใช้ RAM และ VRAM มากขึ้น และความเร็วอาจไม่เพิ่มตามจำนวนเธรด</p>
         <input id="frame-slider" class="frame-slider" aria-label="เลื่อนเลือกเวลาเฟรมตัวอย่าง" type="range" min="0" max="0" step="0.01" value="0">
         <div class="result-actions"><button id="inspect-frame" class="secondary" type="button">โหลดเฟรมและค้นหาใบหน้า</button><button id="swap-preview" type="button" disabled>ดูตัวอย่างหลังสลับหน้า</button><button id="clear-video" class="secondary" type="button">ล้างวิดีโอที่อัปโหลด</button></div>
         <p id="editor-message" class="hint" role="status">เลือกเวลาแล้วโหลดเฟรม วิดีโอจะอัปโหลดเพียงครั้งเดียว</p>

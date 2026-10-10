@@ -126,14 +126,71 @@ class FaceEngine:
             candidates = [(float(np.dot(f.normed_embedding, identity)), f) for f in faces]
             best = max(candidates, key=lambda pair: pair[0]) if candidates else None
             targets = [best[1]] if best and best[0] >= 0.35 else []
+        result, count = self.swap_targets(image, source, targets)
+        return result, count, identity
+
+    def swap_targets(self, image, source, targets):
         result = image.copy()
         for target in targets:
             result = self.swapper.get(result, target, source, paste_back=True)
-        return result, len(targets), identity
+        return result, len(targets)
+
+
+def tracked_frames(engine, source, capture, selection, cancel, identities, thread_count):
+    from face_tracker import FaceTracker
+    tracker = FaceTracker(selection, identities)
+    pool = ThreadPoolExecutor(max_workers=thread_count, thread_name_prefix='swap-frame')
+
+    def detect(frame):
+        if cancel.is_set():
+            raise Cancelled()
+        return engine.faces(frame)
+
+    def render(frame, targets):
+        if cancel.is_set():
+            raise Cancelled()
+        result = engine.swap_targets(frame, source, targets)
+        if cancel.is_set():
+            raise Cancelled()
+        return result
+
+    def result(future):
+        while not wait([future], timeout=.1).done:
+            if cancel.is_set():
+                raise Cancelled()
+        if cancel.is_set():
+            raise Cancelled()
+        return future.result()
+
+    try:
+        while True:
+            batch = []
+            for _ in range(thread_count):
+                if cancel.is_set():
+                    raise Cancelled()
+                ok, frame = capture.read()
+                if not ok:
+                    break
+                batch.append((frame, pool.submit(detect, frame)))
+            if not batch:
+                break
+            rendered = []
+            # Identity and optical flow are updated only in timeline order,
+            # even if inference workers finish their observations out of order.
+            for frame, observation in batch:
+                targets = tracker.select(frame, result(observation))
+                rendered.append(pool.submit(render, frame, targets))
+            for future in rendered:
+                yield result(future)
+    finally:
+        pool.shutdown(wait=True, cancel_futures=True)
 
 
 def processed_frames(engine, source, capture, selection, cancel, identities, thread_count):
     """Keep a bounded window of frames in flight; yield strictly in input order."""
+    if isinstance(engine, FaceEngine):
+        yield from tracked_frames(engine, source, capture, selection, cancel, identities, thread_count)
+        return
     identity = identities
     pending = deque()
     pool = ThreadPoolExecutor(max_workers=thread_count, thread_name_prefix='swap-frame')

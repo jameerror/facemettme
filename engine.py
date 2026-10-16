@@ -39,6 +39,30 @@ def providers_for(mode, available):
     return ['CPUExecutionProvider']
 
 
+def face_tiles(width, height):
+    """Overlapping, bounded search windows, including the image edges."""
+    longest = max(width, height)
+    if longest <= 256:
+        return []
+    side = max(256, math.ceil(longest / 4), min(640, math.ceil(longest / 2)))
+
+    def starts(length):
+        end = max(0, length - side)
+        return sorted(set([*range(0, end, max(1, int(side * .75))), end]))
+
+    return [(x, y, min(x + side, width), min(y + side, height))
+            for y in starts(height) for x in starts(width)]
+
+
+def same_face_box(a, b):
+    """Suppress both duplicate boxes and partial boxes at crop boundaries."""
+    intersection = np.maximum(0, np.minimum(a[2:], b[2:]) - np.maximum(a[:2], b[:2])).prod()
+    area_a = np.maximum(0, a[2:] - a[:2]).prod()
+    area_b = np.maximum(0, b[2:] - b[:2]).prod()
+    return (intersection / max(area_a + area_b - intersection, 1) >= .35 or
+            intersection / max(min(area_a, area_b), 1) >= .7)
+
+
 class FaceEngine:
     def __init__(self):
         self.analyzer = self.swapper = None
@@ -90,7 +114,31 @@ class FaceEngine:
         return self.backend
 
     def faces(self, image):
-        return sorted(self.analyzer.get(image), key=lambda face: float(face.bbox[0]))
+        from insightface.app.common import Face
+        faces = list(self.analyzer.get(image))
+        candidates = []
+        height, width = image.shape[:2]
+        # Run only detection on tiles; compute recognition once per new face
+        # after merging so overlapping tiles do not repeat expensive embeddings.
+        for left, top, right, bottom in face_tiles(width, height):
+            boxes, landmarks = self.analyzer.det_model.detect(image[top:bottom, left:right], max_num=0)
+            if landmarks is None:
+                continue
+            for box, points in zip(boxes, landmarks):
+                bbox = np.asarray(box[:4]) + [left, top, left, top]
+                kps = np.asarray(points) + [left, top]
+                if not np.isfinite(bbox).all() or not np.isfinite(kps).all():
+                    continue
+                if np.any(bbox[2:] - bbox[:2] < 6):
+                    continue
+                candidates.append(Face(bbox=bbox.astype(np.float32),
+                                       kps=kps.astype(np.float32), det_score=float(box[4])))
+        for face in sorted(candidates, key=lambda face: face.det_score, reverse=True):
+            if any(same_face_box(face.bbox, other.bbox) for other in faces):
+                continue
+            self.analyzer.models['recognition'].get(image, face)
+            faces.append(face)
+        return sorted(faces, key=lambda face: float(face.bbox[0]))
 
     def recover_faces(self, image, faces, boxes):
         """Retry missed tracks at crop resolution without changing shared models."""

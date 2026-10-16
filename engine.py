@@ -92,6 +92,38 @@ class FaceEngine:
     def faces(self, image):
         return sorted(self.analyzer.get(image), key=lambda face: float(face.bbox[0]))
 
+    def recover_faces(self, image, faces, boxes):
+        """Retry missed tracks at crop resolution without changing shared models."""
+        from copy import copy
+        from face_tracker import overlap
+        if self.analyzer is None:
+            return faces
+        recovered = list(faces)
+        height, width = image.shape[:2]
+        for box in boxes:
+            if any(overlap(box, face.bbox) >= .25 for face in recovered):
+                continue
+            center = (box[:2] + box[2:]) / 2
+            # Include context and room for motion; the model resizes this crop
+            # to its normal input size, making small faces easier to detect.
+            radius = np.maximum(box[2:] - box[:2], 24)
+            left, top = np.maximum(np.floor(center - radius), 0).astype(int)
+            right, bottom = np.minimum(np.ceil(center + radius), [width, height]).astype(int)
+            if right - left < 24 or bottom - top < 24:
+                continue
+            for candidate in self.analyzer.get(image[top:bottom, left:right]):
+                # InsightFace's Face returns None for missing magic methods,
+                # so Python's copy protocol cannot reconstruct it reliably.
+                face = type(candidate)(candidate) if isinstance(candidate, dict) else copy(candidate)
+                face.bbox = np.asarray(face.bbox).copy() + np.array([left, top, left, top])
+                face.kps = np.asarray(face.kps).copy() + np.array([left, top])
+                if overlap(box, face.bbox) < .2:
+                    continue
+                if any(overlap(face.bbox, other.bbox) >= .25 for other in recovered):
+                    continue
+                recovered.append(face)
+        return sorted(recovered, key=lambda face: float(face.bbox[0]))
+
     def source(self, path):
         faces = self.faces(read_image(path))
         if len(faces) != 1:
@@ -178,7 +210,7 @@ def tracked_frames(engine, source, capture, selection, cancel, identities, threa
             # Identity and optical flow are updated only in timeline order,
             # even if inference workers finish their observations out of order.
             for frame, observation in batch:
-                targets = tracker.select(frame, result(observation))
+                targets = tracker.select(frame, result(observation), engine.recover_faces)
                 rendered.append(pool.submit(render, frame, targets))
             for future in rendered:
                 yield result(future)

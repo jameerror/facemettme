@@ -42,9 +42,16 @@ def detect_with_one_miss(frame):
 
 engine.faces=detect_with_one_miss
 render=engine.swap_targets
+recover=engine.recover_faces
 for selection,expected in [('selected',1),('all',len(people))]:
     misses.clear()
     counts=[]
+    crop_recoveries=[]
+    def recover_and_count(frame,faces,boxes):
+        recovered=recover(frame,faces,boxes)
+        crop_recoveries.append(len(recovered)-len(faces))
+        return recovered
+    engine.recover_faces=recover_and_count
     def render_and_count(frame,source,targets):
         counts.append(len(targets))
         return render(frame,source,targets)
@@ -54,4 +61,5 @@ for selection,expected in [('selected',1),('all',len(people))]:
     assert misses==[True]
     assert details['frames']==details['swapped_frames']==3,details
     assert counts==[expected]*3,counts
-    print('REAL TRACKING PASSED:',selection,'one detector miss recovered; all target faces swapped in 3/3 frames with 4 workers',flush=True)
+    assert sum(crop_recoveries)>=1,crop_recoveries
+    print('REAL TRACKING PASSED:',selection,'one detector miss recovered by crop re-detection; all target faces swapped in 3/3 frames with 4 workers',flush=True)

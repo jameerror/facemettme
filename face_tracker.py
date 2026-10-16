@@ -15,7 +15,8 @@ def overlap(a, b):
 
 class FaceTracker:
     # Never keep a missing/weak identity alive indefinitely.
-    max_gap = 3
+    max_gap = 8
+    max_weak_gap = 3
 
     def __init__(self, selection, identities=None):
         self.selection = selection
@@ -31,14 +32,29 @@ class FaceTracker:
         points = np.asarray(points, np.float32).reshape(-1, 1, 2)
         if len(points) < 4 or not np.isfinite(points).all():
             return None
+        landmarks = points.copy()
+        # Facial landmarks can fall on flat skin or become occluded together.
+        # Add texture points inside the face, away from background/hair edges.
+        x1, y1, x2, y2 = np.asarray(face.bbox, dtype=float)
+        mask = np.zeros_like(self.previous)
+        inset = (np.array([x2-x1, y2-y1]) * .15)
+        left, top = np.maximum(np.ceil([x1, y1] + inset), 0).astype(int)
+        right, bottom = np.minimum(np.floor([x2, y2] - inset),
+                                   [mask.shape[1], mask.shape[0]]).astype(int)
+        if right > left and bottom > top:
+            mask[top:bottom, left:right] = 255
+            features = cv2.goodFeaturesToTrack(self.previous, maxCorners=40,
+                                             qualityLevel=.02, minDistance=4, mask=mask)
+            if features is not None:
+                points = np.concatenate([points, features])
         levels = min(3, max(0, int(np.log2(min(gray.shape)/48))))
         moved, status, error = cv2.calcOpticalFlowPyrLK(self.previous, gray, points, None,
                                                       winSize=(21,21), maxLevel=levels)
-        if moved is None:
+        if moved is None or status is None or error is None:
             return None
         back, back_status, _ = cv2.calcOpticalFlowPyrLK(gray, self.previous, moved, None,
                                                       winSize=(21,21), maxLevel=levels)
-        if back is None:
+        if back is None or back_status is None:
             return None
         valid = (status.ravel() != 0) & (back_status.ravel() != 0) & (error.ravel() < 20)
         valid &= np.linalg.norm(back.reshape(-1,2)-points.reshape(-1,2), axis=1) < 1.5
@@ -46,7 +62,7 @@ class FaceTracker:
             return None
         matrix, inliers = cv2.estimateAffinePartial2D(points.reshape(-1,2)[valid], moved.reshape(-1,2)[valid],
                                                      method=cv2.RANSAC, ransacReprojThreshold=2.)
-        if matrix is None or inliers.sum() < 4:
+        if matrix is None or inliers is None or inliers.sum() < 4 or inliers.mean() < .6:
             return None
         scale = float(np.linalg.norm(matrix[:,0]))
         if not .85 <= scale <= 1.18:
@@ -60,10 +76,10 @@ class FaceTracker:
         center_motion = np.linalg.norm((box[:2]+box[2:]-face.bbox[:2]-face.bbox[2:])/2)
         if center_motion > max(x2-x1, y2-y1)*.6:
             return None
-        landmarks = cv2.transform(points.reshape(1,-1,2), matrix)[0]
+        landmarks = cv2.transform(landmarks.reshape(1,-1,2), matrix)[0]
         return SimpleNamespace(bbox=box, kps=landmarks)
 
-    def select(self, image, faces):
+    def select(self, image, faces, recover=None):
         gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
         if self.previous is not None:
             a = cv2.resize(self.previous, (96,96))
@@ -76,6 +92,12 @@ class FaceTracker:
             if cut:
                 self.tracks.clear()
                 self.previous = None
+
+        if recover is not None and self.tracks:
+            boxes = [track['face'].bbox for track in self.tracks.values()
+                     if not any(overlap(track['face'].bbox, face.bbox) >= .25 for face in faces)]
+            if boxes:
+                faces = recover(image, faces, boxes)
 
         if self.selection == 'largest' and self.identities is None and faces:
             primary = max(faces, key=lambda face: np.prod(face.bbox[2:]-face.bbox[:2]))
@@ -124,7 +146,7 @@ class FaceTracker:
                 index not in used and overlap(box, face.bbox) < .5 and
                 np.dot(face.normed_embedding, self.identities[key]) >= .25
                 for index, face in enumerate(faces))
-            if best[0] >= .25:
+            if best[0] >= .25 and track['gap'] < self.max_weak_gap:
                 recovered = faces[best[1]]
                 used.add(best[1])
             elif predicted is not None and not elsewhere and not any(overlap(box, face.bbox) >= .25 for face in faces):

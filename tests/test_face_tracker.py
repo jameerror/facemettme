@@ -25,7 +25,7 @@ class TrackerTests(unittest.TestCase):
             tracker = FaceTracker(selection, identities)
             self.assertEqual(len(tracker.select(self.frame,[person()])),1)
             with patch.object(tracker,'predict',return_value=person()):
-                for _ in range(3):
+                for _ in range(tracker.max_gap):
                     self.assertEqual(len(tracker.select(self.frame,[])),1)
                 self.assertEqual(tracker.select(self.frame,[]),[])
                 self.assertEqual(tracker.select(self.frame,[]),[])
@@ -62,13 +62,15 @@ class TrackerTests(unittest.TestCase):
     def test_real_optical_flow_follows_motion_without_repeating_old_pixels(self):
         rng = np.random.default_rng(9)
         original = cv2.GaussianBlur(rng.integers(0,256,(120,140,3),dtype=np.uint8),(3,3),0)
-        moved = cv2.warpAffine(original,np.float32([[1,0,3],[0,1,2]]),(140,120))
         tracker = FaceTracker('selected',[[1.,0.]])
         tracker.select(original,[person()])
-        recovered = tracker.select(moved,[])
-        self.assertEqual(len(recovered),1)
-        np.testing.assert_allclose(recovered[0].kps,person().kps+[3,2],atol=.5)
-        self.assertAlmostEqual(recovered[0].bbox[0],33,delta=.5)
+        for step in range(1,tracker.max_gap+1):
+            moved = cv2.warpAffine(original,np.float32([[1,0,3*step],[0,1,2*step]]),(140,120))
+            recovered = tracker.select(moved,[])
+            self.assertEqual(len(recovered),1)
+            np.testing.assert_allclose(recovered[0].kps,person().kps+[3*step,2*step],atol=.5)
+            self.assertAlmostEqual(recovered[0].bbox[0],30+3*step,delta=.5)
+        self.assertEqual(tracker.select(moved,[]),[])
 
     def test_dropout_across_parallel_batch_boundary_is_order_independent(self):
         class Capture:
@@ -90,6 +92,55 @@ class TrackerTests(unittest.TestCase):
                 outputs=list(processed_frames(TestEngine(),None,Capture(),'selected',threading.Event(),[[1.,0.]],threads))
                 self.assertEqual([count for _,count in outputs],[1]*7)
                 self.assertEqual([int(frame[0,0,0]) for frame,_ in outputs],list(range(100,107)))
+
+    def test_texture_points_recover_when_landmark_flow_fails(self):
+        rng = np.random.default_rng(19)
+        original = cv2.GaussianBlur(rng.integers(0,256,(120,140,3),dtype=np.uint8),(3,3),0)
+        moved = cv2.warpAffine(original,np.float32([[1,0,3],[0,1,2]]),(140,120))
+        tracker = FaceTracker('selected',[[1.,0.]])
+        tracker.select(original,[person()])
+        flow = cv2.calcOpticalFlowPyrLK
+        def missing_landmarks(*args, **kwargs):
+            points, status, error = flow(*args, **kwargs)
+            status[:5] = 0
+            return points, status, error
+        with patch('face_tracker.cv2.calcOpticalFlowPyrLK', side_effect=missing_landmarks):
+            recovered = tracker.select(moved,[])
+        self.assertEqual(len(recovered),1)
+        self.assertEqual(recovered[0].kps.shape,(5,2))
+        np.testing.assert_allclose(recovered[0].kps,person().kps+[3,2],atol=.5)
+
+    def test_crop_recovery_restores_detection_and_rechecks_identity(self):
+        from unittest.mock import Mock
+        for score, expected in [(1.,1),(0.,0)]:
+            tracker = FaceTracker('selected',[[1.,0.]])
+            tracker.select(self.frame,[person()])
+            recover = Mock(return_value=[person(score)])
+            with patch.object(tracker,'predict',return_value=person()):
+                self.assertEqual(len(tracker.select(self.frame,[],recover)),expected)
+            recover.assert_called_once()
+        recover.reset_mock()
+        tracker.select(np.full_like(self.frame,255),[],recover)
+        recover.assert_not_called()
+
+    def test_crop_coordinates_duplicates_and_unrelated_faces(self):
+        engine = FaceEngine()
+        crop_face = person(x=40)
+        crop_face.bbox = np.array([20,25,60,75],np.float32)
+        crop_face.kps = person().kps - [10,5]
+        existing = person(x=85)
+        unrelated = person(x=0)
+        unrelated.bbox = np.array([0,0,10,10],np.float32)
+        from unittest.mock import Mock
+        engine.analyzer = SimpleNamespace(get=Mock(return_value=[crop_face,crop_face,unrelated]))
+        targets = engine.recover_faces(self.frame,[existing],[person().bbox])
+        self.assertEqual(len(targets),2)
+        np.testing.assert_allclose(targets[0].bbox,person().bbox)
+        np.testing.assert_allclose(targets[0].kps,person().kps)
+        np.testing.assert_allclose(crop_face.bbox,[20,25,60,75])
+        engine.analyzer.get.reset_mock()
+        engine.recover_faces(self.frame,[person()],[person().bbox])
+        engine.analyzer.get.assert_not_called()
 
     def test_tracked_pipeline_keeps_inference_parallel(self):
         barrier=threading.Barrier(4)

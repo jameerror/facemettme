@@ -24,6 +24,7 @@ class FaceTracker:
         self.tracks = {}
         self.previous = None
         self.next_id = 0
+        self.appearances = {}
 
     def predict(self, face, gray):
         points = getattr(face, 'kps', None)
@@ -91,6 +92,7 @@ class FaceTracker:
             cut |= difference > 12 and cv2.compareHist(hist_a, hist_b, cv2.HISTCMP_BHATTACHARYYA) > .55
             if cut:
                 self.tracks.clear()
+                self.appearances.clear()
                 self.previous = None
 
         if recover is not None and self.tracks:
@@ -105,6 +107,7 @@ class FaceTracker:
 
         matches = {}
         used = set()
+        predictions = {}
         if self.selection == 'all':
             # All current detections are eligible; associate old tracks only to
             # avoid duplicating a face when recovering a missed detection.
@@ -130,12 +133,44 @@ class FaceTracker:
                     matches[key] = faces[index]
                     used.add(index)
 
+            # Learn only views that independently match the fixed reference.
+            # Use those views for gradual turns only with verified motion and
+            # a residual reference match; never learn from weak/flow-only faces.
+            view_pairs = []
+            for key, track in self.tracks.items():
+                if key in matches or not self.appearances.get(key):
+                    continue
+                predicted = self.predict(track['face'],gray)
+                predictions[key] = predicted
+                if predicted is None:
+                    continue
+                for index, face in enumerate(faces):
+                    if index in used or overlap(predicted.bbox,face.bbox) < .5:
+                        continue
+                    anchor = float(np.dot(face.normed_embedding,self.identities[key]))
+                    recent = max(float(np.dot(face.normed_embedding,sample))
+                                 for sample in self.appearances[key])
+                    if anchor >= .2 and recent >= .65:
+                        view_pairs.append((recent,index,key))
+            for _, index, key in sorted(view_pairs,reverse=True):
+                if index not in used and key not in matches:
+                    matches[key] = faces[index]
+                    used.add(index)
+            for key, face in matches.items():
+                embedding = face.normed_embedding
+                if np.dot(embedding,self.identities[key]) < .5:
+                    continue
+                samples = self.appearances.setdefault(key,[])
+                if not any(np.dot(embedding,sample) >= .98 for sample in samples):
+                    samples.append(embedding.copy())
+                    del samples[:-6]
+
         targets = list(matches.values())
         new_tracks = {key: dict(face=face, gap=0) for key, face in matches.items()}
         for key, track in self.tracks.items():
             if key in matches or track['gap'] >= self.max_gap:
                 continue
-            predicted = self.predict(track['face'], gray)
+            predicted = predictions[key] if key in predictions else self.predict(track['face'], gray)
             box = predicted.bbox if predicted is not None else track['face'].bbox
             weak = []
             if self.identities is not None:

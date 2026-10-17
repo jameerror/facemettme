@@ -39,6 +39,39 @@ class TrackerTests(unittest.TestCase):
                 self.assertEqual(len(tracker.select(self.frame,[person(.3)])),1)
             self.assertEqual(tracker.select(self.frame,[person(.3)]),[])
 
+    def test_learned_view_keeps_gradual_turn_with_verified_flow(self):
+        tracker = FaceTracker('selected',[[1.,0.]])
+        tracker.select(self.frame,[person()])
+        tracker.select(self.frame,[person(.55)])
+        with patch.object(tracker,'predict',return_value=person()):
+            for _ in range(12):
+                self.assertEqual(len(tracker.select(self.frame,[person(.3)])),1)
+        # Weak views are never added, so repeated recovery cannot teach drift.
+        self.assertEqual(len(tracker.appearances[0]),2)
+
+    def test_learned_views_cannot_recover_unrelated_or_displaced_people(self):
+        for candidate in [person(0.),person(.3,85)]:
+            tracker = FaceTracker('selected',[[1.,0.]])
+            tracker.select(self.frame,[person()])
+            tracker.select(self.frame,[person(.55)])
+            with patch.object(tracker,'predict',return_value=person()):
+                self.assertEqual(tracker.select(self.frame,[candidate]),[])
+
+    def test_scene_cut_forgets_learned_views(self):
+        tracker = FaceTracker('selected',[[1.,0.]])
+        tracker.select(self.frame,[person(.55)])
+        self.assertTrue(tracker.appearances)
+        tracker.select(np.full_like(self.frame,255),[])
+        self.assertEqual(tracker.appearances,{})
+
+    def test_learned_view_without_verified_motion_still_expires(self):
+        tracker = FaceTracker('selected',[[1.,0.]])
+        tracker.select(self.frame,[person(.55)])
+        with patch.object(tracker,'predict',return_value=None):
+            for _ in range(tracker.max_weak_gap):
+                self.assertEqual(len(tracker.select(self.frame,[person(.3)])),1)
+            self.assertEqual(tracker.select(self.frame,[person(.3)]),[])
+
     def test_other_person_or_changed_position_is_not_recovered(self):
         for detected in [person(0.), person(.3,85)]:
             tracker = FaceTracker('selected',[[1.,0.]])

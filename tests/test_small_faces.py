@@ -1,6 +1,6 @@
 import unittest
 from types import SimpleNamespace
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 
 import numpy as np
 
@@ -8,6 +8,14 @@ from engine import FaceEngine, face_tiles, same_face_box
 
 
 class SmallFaceTests(unittest.TestCase):
+    def setUp(self):
+        angles = patch('engine.DETECTION_ANGLES',(0,))
+        angles.start()
+        self.addCleanup(angles.stop)
+        mirrors = patch('engine.DETECTION_MIRRORS',(False,))
+        mirrors.start()
+        self.addCleanup(mirrors.stop)
+
     def test_tiles_cover_edges_and_bound_work_for_large_and_portrait_images(self):
         for width, height in [(1920,1080),(1080,1920),(8000,5000),(3000,300)]:
             tiles = face_tiles(width,height)

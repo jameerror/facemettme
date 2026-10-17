@@ -13,6 +13,8 @@ from settings import MODEL_ROOT
 
 ROOT = Path(__file__).resolve().parent
 SWAP_MODEL = MODEL_ROOT / 'inswapper_128.onnx'
+DETECTION_ANGLES = (0, 90, 180, 270, 45, 135, 225, 315)
+DETECTION_MIRRORS = (False, True)
 
 
 class Cancelled(Exception):
@@ -61,6 +63,35 @@ def same_face_box(a, b):
     area_b = np.maximum(0, b[2:] - b[:2]).prod()
     return (intersection / max(area_a + area_b - intersection, 1) >= .35 or
             intersection / max(min(area_a, area_b), 1) >= .7)
+
+
+def rotated_view(image, angle):
+    """Rotate without cutting corners; return the map back to source pixels."""
+    if angle == 0:
+        return image, np.eye(2, 3, dtype=np.float32)
+    height, width = image.shape[:2]
+    matrix = cv2.getRotationMatrix2D(((width-1)/2, (height-1)/2), angle, 1.)
+    cosine, sine = abs(matrix[0,0]), abs(matrix[0,1])
+    out_width = int(math.ceil(width*cosine + height*sine - 1e-6))
+    out_height = int(math.ceil(height*cosine + width*sine - 1e-6))
+    matrix[:,2] += [(out_width-width)/2, (out_height-height)/2]
+    rotated = cv2.warpAffine(image, matrix, (out_width,out_height),
+                             borderMode=cv2.BORDER_CONSTANT, borderValue=(127,127,127))
+    return rotated, cv2.invertAffineTransform(matrix)
+
+
+def detection_views(image):
+    for angle in DETECTION_ANGLES:
+        rotated, inverse = rotated_view(image, angle)
+        for mirrored in DETECTION_MIRRORS:
+            if not mirrored:
+                yield angle, False, rotated, inverse
+                continue
+            # Compose the reflection with the rotation's inverse. Mirroring
+            # also reverses eye/mouth labels, which must be restored separately.
+            reflection = np.array([[-1,0,rotated.shape[1]-1],[0,1,0],[0,0,1]],float)
+            mapping = np.vstack([inverse,[0,0,1]]) @ reflection
+            yield angle, True, cv2.flip(rotated,1), mapping[:2]
 
 
 class FaceEngine:
@@ -115,28 +146,46 @@ class FaceEngine:
 
     def faces(self, image):
         from insightface.app.common import Face
-        faces = list(self.analyzer.get(image))
-        candidates = []
+        original = list(self.analyzer.get(image))
+        original_ids = {id(face) for face in original}
+        faces = []
+        candidates = list(original)
         height, width = image.shape[:2]
         # Run only detection on tiles; compute recognition once per new face
         # after merging so overlapping tiles do not repeat expensive embeddings.
-        for left, top, right, bottom in face_tiles(width, height):
-            boxes, landmarks = self.analyzer.det_model.detect(image[top:bottom, left:right], max_num=0)
-            if landmarks is None:
-                continue
-            for box, points in zip(boxes, landmarks):
-                bbox = np.asarray(box[:4]) + [left, top, left, top]
-                kps = np.asarray(points) + [left, top]
-                if not np.isfinite(bbox).all() or not np.isfinite(kps).all():
+        regions = [(0,0,width,height), *face_tiles(width, height)]
+        for region_index, (left, top, right, bottom) in enumerate(regions):
+            crop = image[top:bottom,left:right]
+            for angle, mirrored, view, inverse in detection_views(crop):
+                if region_index == 0 and angle == 0 and not mirrored:
+                    continue  # Already detected by analyzer.get above.
+                boxes, landmarks = self.analyzer.det_model.detect(view, max_num=0)
+                if landmarks is None:
                     continue
-                if np.any(bbox[2:] - bbox[:2] < 6):
-                    continue
-                candidates.append(Face(bbox=bbox.astype(np.float32),
-                                       kps=kps.astype(np.float32), det_score=float(box[4])))
-        for face in sorted(candidates, key=lambda face: face.det_score, reverse=True):
+                for box, points in zip(boxes, landmarks):
+                    x1,y1,x2,y2 = box[:4]
+                    corners = np.array([[[x1,y1],[x2,y1],[x2,y2],[x1,y2]]],np.float32)
+                    mapped = cv2.transform(corners,inverse)[0]
+                    bbox = np.r_[mapped.min(axis=0),mapped.max(axis=0)]
+                    bbox = np.clip(bbox,[0,0,0,0],[right-left,bottom-top]*2)
+                    bbox += [left,top,left,top]
+                    points = np.asarray(points,np.float32)
+                    if mirrored:
+                        points = points[[1,0,2,4,3]]
+                    kps = cv2.transform(points[None],inverse)[0] + [left,top]
+                    if not np.isfinite(bbox).all() or not np.isfinite(kps).all():
+                        continue
+                    if np.any(bbox[2:] - bbox[:2] < 6):
+                        continue
+                    candidates.append(Face(bbox=bbox.astype(np.float32),
+                                           kps=kps.astype(np.float32), det_score=float(box[4])))
+        # An upside-down face can be weakly detected with incorrect landmark
+        # ordering. Prefer the strongest orientation, even over the first pass.
+        for face in sorted(candidates, key=lambda face: getattr(face,'det_score',1.), reverse=True):
             if any(same_face_box(face.bbox, other.bbox) for other in faces):
                 continue
-            self.analyzer.models['recognition'].get(image, face)
+            if id(face) not in original_ids:
+                self.analyzer.models['recognition'].get(image, face)
             faces.append(face)
         return sorted(faces, key=lambda face: float(face.bbox[0]))
 
